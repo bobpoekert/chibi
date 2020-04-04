@@ -1,0 +1,3 @@
+(test
+ (name chibibb)
+ (libraries opium tyxml omd camlimages))

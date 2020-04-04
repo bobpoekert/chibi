@@ -1,0 +1,4 @@
+(executable
+ (public_name chibibb)
+ (name main)
+ (libraries chibibb opium tyxml omd camlimages))

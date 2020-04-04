@@ -1,0 +1,3 @@
+(library
+ (name chibibb)
+ (libraries opium tyxml omd camlimages capnp))

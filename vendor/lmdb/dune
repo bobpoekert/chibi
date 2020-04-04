@@ -1,0 +1,21 @@
+
+(library
+ (name lmdb)
+ (synopsis "Bindings for LMDB, a fast in-file database with ACID transactions")
+ (flags :standard -safe-string -thread)
+ (libraries bigstringaf)
+ (foreign_stubs
+    (language c)
+    (names lmdb_stubs)
+    (include_dirs liblmdb/)
+    (flags -Wall -Wextra -Wno-unused-parameter -pedantic -std=c99 -O2))
+ (foreign_archives lmdb))
+
+(rule
+    (targets liblmdb.a)
+    (deps (source_tree liblmdb))
+    (action
+        (progn
+            (chdir liblmdb (run make liblmdb.a))
+            (copy liblmdb/liblmdb.a liblmdb.a))))
+

@@ -1,0 +1,4 @@
+(library
+    (name chibi_util)
+    (libraries lwt lwt.unix batteries)
+    (preprocess (pps lwt_ppx)))

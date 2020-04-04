@@ -1,0 +1,9 @@
+(library
+    (name pwhash)
+    (synopsis "Password hashing")
+    (foreign_stubs
+        (language c)
+        (names pwhash_stubs)
+        (include_dirs libhydrogen/)
+        (flags -std=c99 -O2)))
+
