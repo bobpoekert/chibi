@@ -37,6 +37,7 @@ type post_content_type =
     the fields that reference that data are a pair of offset, length ints
  *)
 
+let user_version = 1;
 [%%cstruct 
 type user = {
     (* version 1 *)
@@ -51,9 +52,8 @@ type user = {
     signature_offset: uint32_t;
     signature_length: uint32_t;
     avatar_id: uint64_t;
-    liked_post_ids_offset: uint32_t;
-    n_liked_post_ids: uint64_t;
     most_recent_post_id: uint64_t;
+    most_recent_like_id: uint64_t;
     user_type: uint8_t;
     remote_uri_offset: uint32_t;
     remote_uri_length: uint32_t;
@@ -105,12 +105,6 @@ let buffer_builder_create struct_size = {
     size = struct_size;
 }
 
-let buffer_builder_append builder buffer = {
-    st = builder.st;
-    buffers = buffer :: builder.buffers;
-    size = (Array1.dim buffer) + builder.size;
-}
-
 let buffer_builder_pack builder = 
     let st_buf = Cstruct.to_bigarray builder.st in 
     let res = Bigstring.create builder.size in 
@@ -138,14 +132,20 @@ let string_setter offset_setter length_setter =
     let vc = varchar_setter offset_setter length_setter in 
     fun builder s -> vc builder (Bigstring.of_string s)
 
+type 'a packer = Bigstring.t -> int -> 'a -> unit
+let pack_int_array int_width packer data = 
+    let length = Array.length data in 
+    let res = Bigstring.create (int_width * length) in 
+    for idx = 0 to length do 
+        packer res (idx * int_width) (Array.get data idx)
+    done;
+    res
+
 let array_setter offset_setter length_setter int_width packer = 
     fun builder vs -> 
         let length = Array.length vs in
-        let res = Bigstring.create (int_width * length) in 
+        let res = pack_int_array int_width packer vs in
         let new_off = builder.size + (length * int_width) in
-        for idx = 0 to length do 
-            packer res (idx * int_width) (Array.get vs idx)
-        done;
         offset_setter builder.st new_off;
         length_setter builder.st length;
         {
@@ -154,26 +154,35 @@ let array_setter offset_setter length_setter int_width packer =
             size = new_off;
         }
 
-let get_user_name = varchar_getter 
+let user_get_name = string_getter 
     (get_user_name_offset %> Int32.to_int)
     (get_user_name_length %> Int32.to_int)
-let get_user_bio = varchar_getter
+let user_get_bio = string_getter
     (get_user_bio_offset %> Int32.to_int)
     (get_user_bio_length %> Int32.to_int)
-let get_user_signature = varchar_getter 
+let user_get_signature = string_getter 
     (get_user_signature_offset %> Int32.to_int)
     (get_user_signature_length %> Int32.to_int)
-let get_user_remote_uri = varchar_getter
+let user_get_remote_uri = string_getter
     (get_user_remote_uri_offset %> Int32.to_int)
     (get_user_remote_uri_length %> Int32.to_int)
 
-let get_user_liked_post_ids = array_getter
-    (get_user_liked_post_ids_offset %> Int32.to_int) 
-    (get_user_n_liked_post_ids %> Int64.to_int)
-    Int64.zero 8 LittleEndian.get_int64
+let buffer_unpacker field_unpacker = 
+    (fun (buf:Cstruct.buffer) -> field_unpacker (Cstruct.of_bigarray buf))
+
+let user_get_created_on = buffer_unpacker get_user_created_on 
+let user_get_last_update_time = buffer_unpacker get_user_last_update_time
+let user_get_update_interval = buffer_unpacker get_user_update_interval
+
+let user_get_type buf = 
+    Cstruct.of_bigarray buf
+    |> get_user_user_type 
+    |> int_to_user_type
 
 let make_int32_arg_int f = (fun a v -> f a (Int32.of_int v))
-let make_int64_arg_int f = (fun a v -> f a (Int64.of_int v))
+(* unused
+    let make_int64_arg_int f = (fun a v -> f a (Int64.of_int v))
+    *)
 let string_setter_int32 o l = string_setter 
     (make_int32_arg_int o)
     (make_int32_arg_int l)
@@ -183,48 +192,51 @@ let user_with_bio = string_setter_int32 set_user_bio_offset set_user_bio_length
 let user_with_signature = string_setter_int32 set_user_signature_offset set_user_signature_length 
 let user_with_remote_uri = string_setter_int32 set_user_remote_uri_length set_user_remote_uri_offset
 
-let user_with_liked_post_ids = array_setter 
-    (make_int32_arg_int set_user_liked_post_ids_offset)
-    (make_int64_arg_int set_user_n_liked_post_ids)
-     8 LittleEndian.set_int64
 
-let maybe_string_length s = 
-    match s with 
-    | Some s -> String.length s 
-    | None -> 0
+type user = {
+    password_hash : string option;
+    bio : string option;
+    signature : string option;
+    avatar_id : int64 option;
+    most_recent_post_id : int64 option;
+    remote_uri : string option;
+    update_interval : int64 option;
+    name : string;
+    user_type : user_type;
+}
 
-let create_user_buffer
-    ?password_hash 
-    ?bio 
-    ?signature 
-    ?avatar_id
-    ?liked_post_ids
-    ?most_recent_post_id
-    ?remote_uri 
-    ?update_interval
-    id name user_type : Bigstring.t =
+let default_user = {
+    password_hash = None;
+    bio = None;
+    signature = None;
+    avatar_id = None;
+    most_recent_post_id = None;
+    remote_uri = None;
+    update_interval = None;
+    name = "";
+    user_type = LOCAL;
+}
+
+let create_user_buffer user : Cstruct.buffer =
 
     let res = buffer_builder_create sizeof_user in 
-    let res = user_with_name res name in 
-    let res = match bio with | Some bio -> user_with_bio res bio | None -> res in 
-    let res = match signature with | Some s -> user_with_signature res s | None -> res in 
-    let res = match remote_uri with | Some u -> user_with_remote_uri res u | None -> res in 
-    let res = match liked_post_ids with
-        | Some i -> user_with_liked_post_ids res (Array.map Int64.of_int i)
-        | None -> res in
+    let res = user_with_name res user.name in 
+    let res = match user.bio with | Some bio -> user_with_bio res bio | None -> res in 
+    let res = match user.signature with | Some s -> user_with_signature res s | None -> res in 
+    let res = match user.remote_uri with | Some u -> user_with_remote_uri res u | None -> res in 
 
     let st = res.st in (
         (
-            set_user_id st id;
-            set_user_user_type st (user_type_to_int user_type);
-            match avatar_id with | None -> () | Some v -> set_user_avatar_id st v;
-            match most_recent_post_id with 
+            set_user_user_type st (user_type_to_int user.user_type);
+            set_user_version st user_version;
+            match user.avatar_id with | None -> () | Some v -> set_user_avatar_id st v;
+            match user.most_recent_post_id with 
             | None -> ()
             | Some v -> set_user_most_recent_post_id st v;
-            match update_interval with 
+            match user.update_interval with 
             | None -> () 
             | Some v -> set_user_update_interval st v;
-            match password_hash with 
+            match user.password_hash with 
             | Some h -> set_user_password_hash h 0 st
             | None -> ()
         );
@@ -236,26 +248,28 @@ let create_user_buffer
 type attachment = {
     kind: uint8_t;
     offset: uint64_t;
-    size: uint64_t;
+    size: uint32_t;
 }
 [@@little_endian]]
 
 type attachment_record = {
     kind: attachment_type;
-    offset: int;
+    id: int;
     size: int
 }
 
 let default_attachment:attachment_record = {
     kind = BLOB;
-    offset = 0;
+    id = 0;
     size = 0;
 }
 
 [%%cstruct 
 type post = {
-    author_id: uint64_t;
     created_on: uint64_t;
+
+    author_offset: uint32_t;
+    author_size: uint32_t;
 
     content_offset: uint32_t;
     content_size: uint32_t;
@@ -266,7 +280,7 @@ type post = {
 
     prev_post_by_author: uint64_t;
 
-    (* topics are an array of uint32 id's *)    
+    (* topics are arrays of uint32 id's and prev post pointers *)    
     n_topics: uint16_t;
     topics_offset: uint32_t;
 
@@ -281,11 +295,26 @@ type post = {
 }
 [@@little_endian]]
 
-let get_post_content = string_getter
+type post = {
+    created_on : int64;
+    author : string;
+    content : string option;
+    attachments : attachment_record array;
+    prev_post_by_author : int64 option;
+    topics : int32 array;
+    in_reply_to : int64 option;
+    deleted_on : int64 option;
+}
+
+let post_get_author = string_getter
+    (get_post_author_offset %> Int32.to_int)
+    (get_post_author_size %> Int32.to_int)
+
+let post_get_content = string_getter
     (get_post_content_offset %> Int32.to_int)
     (get_post_content_size %> Int32.to_int)
 
-let get_post_attachments blob = 
+let post_get_attachments blob = 
     let st = Cstruct.of_bigarray blob in
     let offset = get_post_attachments_offset st |> Int32.to_int in 
     let n_attachments = get_post_n_attachments st |> Int32.to_int in 
@@ -299,8 +328,8 @@ let get_post_attachments blob =
                     ~off:off ~len:sizeof_attachment blob in 
                 let attachment = {
                     kind = get_attachment_kind attachment_st |> decode_attachment_type;
-                    offset = get_attachment_offset attachment_st |> Int64.to_int;
-                    size = get_attachment_size attachment_st |> Int64.to_int;
+                    id = get_attachment_offset attachment_st |> Int64.to_int;
+                    size = get_attachment_size attachment_st |> Int32.to_int;
                 } in (
                     Array.set res idx attachment;
                     collect_attachments (idx + 1) (off + sizeof_attachment)
@@ -308,15 +337,63 @@ let get_post_attachments blob =
             ) in 
         collect_attachments 0 offset; res
 
-let get_post_topics = array_getter
+let post_get_topics = array_getter
     (get_post_topics_offset %> Int32.to_int)
     get_post_n_topics
     Int32.zero 4 LittleEndian.get_int32
 
-let set_post_content = string_setter 
+let post_with_author = string_setter 
+    (make_int32_arg_int set_post_author_offset)
+    (make_int32_arg_int set_post_author_size)
+let post_with_content = string_setter 
     (make_int32_arg_int set_post_content_offset)
     (make_int32_arg_int set_post_content_size)
 let post_with_topics = array_setter 
     (make_int32_arg_int set_post_topics_offset)
     set_post_n_topics
     4 LittleEndian.set_int32
+
+let post_get_created_on = buffer_unpacker get_post_created_on 
+
+let post_with_attachments buf attachments = 
+    let n_attachments = Array.length attachments in 
+    if n_attachments < 1 then buf else 
+    let res = Bigstring.create (n_attachments * sizeof_attachment) in (
+        for i = 0 to n_attachments do
+            let a_inp = Array.get attachments i in 
+            let attachment = Cstruct.of_bigarray 
+                ~off:(i * sizeof_attachment)
+                ~len:sizeof_attachment res in (
+                    set_attachment_kind attachment (attachment_type_to_int a_inp.kind);
+                    set_attachment_offset attachment (Int64.of_int a_inp.id);
+                    set_attachment_size attachment (Int32.of_int a_inp.size);
+                )
+        done;
+        set_post_n_attachments buf.st (Int32.of_int n_attachments);
+        set_post_n_attachments buf.st (Int32.of_int buf.size);
+        {
+            st = buf.st;
+            size = buf.size + (Bigstring.length res);
+            buffers = res :: buf.buffers;
+        }
+    )
+
+let create_post_buffer post : Bigstring.t = 
+    let res = buffer_builder_create sizeof_post in 
+    let res = post_with_author res post.author in 
+    let res = match post.content with | None -> res | Some v -> post_with_content res v in 
+    let res = post_with_topics res post.topics in 
+    let res = post_with_attachments res post.attachments in (
+        set_post_created_on res.st post.created_on;
+        (match post.prev_post_by_author with 
+        | None -> ()
+        | Some v -> set_post_prev_post_by_author res.st v);
+        (match post.in_reply_to with 
+        | None -> () 
+        | Some v -> set_post_in_reply_to res.st v);
+        (match post.deleted_on with 
+        | None -> () 
+        | Some v -> set_post_deleted_on res.st v);
+
+        buffer_builder_pack res
+    )
