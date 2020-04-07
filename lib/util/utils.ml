@@ -44,3 +44,13 @@ let sse_stream instream =
             Str.global_replace crlf_re "\\1data: " s
         )
     ) instream
+
+let int64_to_base64 i = 
+    let s = Bytes.create 8 in (
+        EndianBytes.LittleEndian.set_int64 s 0 i;
+        BatBase64.str_encode (Bytes.to_string s)
+    )
+
+let int64_of_base64 s = 
+    let s = BatBase64.str_decode s |> Bytes.of_string in 
+    EndianBytes.LittleEndian.get_int64 s 0

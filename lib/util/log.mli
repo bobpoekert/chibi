@@ -8,4 +8,6 @@ val overwrite : log -> Bigstring.t -> int -> unit
 val append : log -> Bigstring.t -> unit
 val read_end : log -> int -> Bigstring.t
 
+val end_off : log -> int
+
 val with_write_lock : (unit -> 'a) -> log -> 'a

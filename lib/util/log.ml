@@ -121,10 +121,16 @@ let file_containing fs start =
     if h_end < start then raise Not_found else
     List.find (fun (off, f) -> (off + (file_get_end_offset f |> Int32.to_int)) < start) fs
 
+
 let read l start len = 
     let files = !(l.files) in 
     let off, fd = file_containing files start in 
     Bigstring.sub fd.buffer (start - off) len
+
+let end_off l = 
+    let fs = !(l.files) in 
+    let last_off, last_f = List.hd fs in 
+    last_off + (file_get_end_offset last_f |> Int32.to_int)
 
 let read_end l len = 
     let fs = !(l.files) in 
