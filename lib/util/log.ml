@@ -10,6 +10,7 @@ type mapped_file = {
 let map_file size fname : mapped_file = 
     let fd = Unix.openfile fname [Unix.O_RDWR; Unix.O_CREAT; Unix.O_APPEND] 0o660 in 
     let _ = Unix.ftruncate fd size in 
+    let _ = Unix.lockf fd Unix.F_TLOCK 0 in 
     let buffer = Unix.map_file fd Char c_layout true [| -1 |] in 
     let buffer = array1_of_genarray buffer in
     {fd = fd; buffer = buffer;}
@@ -162,7 +163,8 @@ let append l buffer =
             let _ = append_log_file l in run ()
         else (
             file_set_end_offset last_fd (Int32.of_int new_end);
-            Bigstring.blit buffer 0 last_fd.buffer last_file_size buffer_size
+            Bigstring.blit buffer 0 last_fd.buffer last_file_size buffer_size;
+            last_file_size
         )
     ) in
     if buffer_size > l.max_file_size then

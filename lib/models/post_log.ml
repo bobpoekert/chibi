@@ -46,20 +46,18 @@ let correct_magic_number = EndianString.LittleEndian.get_int32 "FLOG" 0
 let get_checksum data = 
     Crc32.string (Bigstring.to_string data) 0 (Bigstring.length data)
 
-let do_read_op l thunk = 
-    Lwt_preemptive.detach thunk l
-
-let do_write_op l thunk = 
-    Lwt_preemptive.detach (Log.with_write_lock thunk) l
+let get_post_header l offset = 
+    let header_offset = offset - sizeof_log_header in 
+    let header_blob = Log.read l header_offset sizeof_log_header in 
+    Cstruct.of_bigarray header_blob
 
 let rec inner_read_log_entry offset l ctr = 
     if ctr > 10 then raise (Corrupt Bad_checksum) else
     let offset = match offset with 
         | Some o -> o 
         | None -> Log.end_off l in 
+    let header_blob = get_post_header l offset in
     let header_offset = offset - sizeof_log_header in 
-    let header_blob = Log.read l header_offset sizeof_log_header in 
-    let header_blob = Cstruct.of_bigarray header_blob in 
 
     let magic = get_log_header_magic_number header_blob in 
     if magic != correct_magic_number then raise (Corrupt Bad_magic_number) else
@@ -74,7 +72,13 @@ let rec inner_read_log_entry offset l ctr =
 
     (entry_type, entry_blob)
 
-let read_log_entry ?offset l = do_read_op 0 (inner_read_log_entry offset l)
+let read_log_entry ?offset l = inner_read_log_entry offset l 0
+
+let prev_entry_id l offset = 
+    if offset < 1 then None else
+    let header = get_post_header l offset in 
+    let size = get_log_header_length header |> Int64.to_int in 
+    Some (offset - size - sizeof_log_header)
 
 let append_log_entry flog entry_type blob = 
     let length = Bigstring.length blob in 
@@ -86,13 +90,10 @@ let append_log_entry flog entry_type blob =
         set_log_header_checksum header checksum;
         set_log_header_entry_type header (log_entry_type_to_int entry_type);
         set_log_header_magic_number header correct_magic_number;
-        do_write_op flog (fun () -> 
-            Log.append flog res
-        )
+        Log.append flog res
     )
 
-
-let rec inner_update_log_entry updater flog offset = 
+let rec update_log_entry updater flog offset = 
     let header_offset = offset - sizeof_log_header in 
     let header_blob = Log.read flog header_offset sizeof_log_header in
     let header_st = Cstruct.of_bigarray header_blob in 
@@ -117,9 +118,7 @@ let rec inner_update_log_entry updater flog offset =
             let check_checksum = get_log_header_checksum new_header_st in 
             if check_checksum != old_checksum then
                 (* CAS retry *)
-                inner_update_log_entry updater flog offset 
+                update_log_entry updater flog offset 
             else
                 Log.overwrite flog write_buffer header_offset
         ) flog
-
-let update_log_entry updater flog offset = do_read_op offset (inner_update_log_entry updater flog)

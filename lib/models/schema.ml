@@ -52,8 +52,7 @@ type user = {
     signature_offset: uint32_t;
     signature_length: uint32_t;
     avatar_id: uint64_t;
-    most_recent_post_id: uint64_t;
-    most_recent_like_id: uint64_t;
+    last_post_id: uint64_t;
     user_type: uint8_t;
     remote_uri_offset: uint32_t;
     remote_uri_length: uint32_t;
@@ -141,6 +140,7 @@ let pack_int_array int_width packer data =
     done;
     res
 
+(* unused 
 let array_setter offset_setter length_setter int_width packer = 
     fun builder vs -> 
         let length = Array.length vs in
@@ -153,6 +153,7 @@ let array_setter offset_setter length_setter int_width packer =
             buffers = res :: builder.buffers;
             size = new_off;
         }
+        *)
 
 let user_get_name = string_getter 
     (get_user_name_offset %> Int32.to_int)
@@ -169,10 +170,24 @@ let user_get_remote_uri = string_getter
 
 let buffer_unpacker field_unpacker = 
     (fun (buf:Cstruct.buffer) -> field_unpacker (Cstruct.of_bigarray buf))
+let buffer_packer packer = 
+    (fun (buf:Cstruct.buffer) v -> packer (Cstruct.of_bigarray buf) v)
+
+let sentinel_is_none sentinel f =
+    (fun v -> let res = f v in if res == sentinel then None else Some res)
 
 let user_get_created_on = buffer_unpacker get_user_created_on 
 let user_get_last_update_time = buffer_unpacker get_user_last_update_time
 let user_get_update_interval = buffer_unpacker get_user_update_interval
+let user_get_last_post_id = 
+    get_user_last_post_id
+    |> buffer_unpacker 
+    |> sentinel_is_none Int64.zero
+
+let user_set_created_on = buffer_packer set_user_created_on 
+let user_set_last_update_time = buffer_packer set_user_last_update_time
+let user_set_update_interval = buffer_packer set_user_update_interval
+let user_set_last_post_id = buffer_packer set_user_last_post_id
 
 let user_get_type buf = 
     Cstruct.of_bigarray buf
@@ -198,7 +213,7 @@ type user = {
     bio : string option;
     signature : string option;
     avatar_id : int64 option;
-    most_recent_post_id : int64 option;
+    last_post_id : int64 option;
     remote_uri : string option;
     update_interval : int64 option;
     name : string;
@@ -210,7 +225,7 @@ let default_user = {
     bio = None;
     signature = None;
     avatar_id = None;
-    most_recent_post_id = None;
+    last_post_id = None;
     remote_uri = None;
     update_interval = None;
     name = "";
@@ -230,9 +245,9 @@ let create_user_buffer user : Cstruct.buffer =
             set_user_user_type st (user_type_to_int user.user_type);
             set_user_version st user_version;
             match user.avatar_id with | None -> () | Some v -> set_user_avatar_id st v;
-            match user.most_recent_post_id with 
+            match user.last_post_id with 
             | None -> ()
-            | Some v -> set_user_most_recent_post_id st v;
+            | Some v -> set_user_last_post_id st v;
             match user.update_interval with 
             | None -> () 
             | Some v -> set_user_update_interval st v;
@@ -302,7 +317,9 @@ type post = {
     attachments : attachment_record array;
     prev_post_by_author : int64 option;
     topics : int32 array;
+    prev_posts_by_topic : int64 array;
     in_reply_to : int64 option;
+    next_reply : int64 option;
     deleted_on : int64 option;
 }
 
@@ -348,12 +365,58 @@ let post_with_author = string_setter
 let post_with_content = string_setter 
     (make_int32_arg_int set_post_content_offset)
     (make_int32_arg_int set_post_content_size)
-let post_with_topics = array_setter 
-    (make_int32_arg_int set_post_topics_offset)
-    set_post_n_topics
-    4 LittleEndian.set_int32
+
+let post_with_topics builder topics prev_ids = 
+    let n_topics = Array.length topics in 
+    if n_topics != (Array.length prev_ids) then raise (Failure "topic arrays don't match") else
+    let buffer_size = (n_topics * 4) + (n_topics * 8) in 
+    let ids_start = n_topics * 4 in 
+    let buffer = Bigstring.create buffer_size in (
+        for i = 0 to n_topics do 
+            LittleEndian.set_int32 buffer (i * 4) (Array.get topics i);
+            LittleEndian.set_int64 buffer (ids_start + i * 8) (Array.get prev_ids i);
+        done;
+        {
+            st = builder.st;
+            size = builder.size + buffer_size;
+            buffers = buffer :: builder.buffers;
+        }
+    )
 
 let post_get_created_on = buffer_unpacker get_post_created_on 
+let post_get_prev_post_by_author = buffer_unpacker get_post_prev_post_by_author 
+let post_get_prev_revision = buffer_unpacker get_post_prev_revision
+let post_get_next_revision = buffer_unpacker get_post_next_revision
+let post_get_in_reply_to = 
+    get_post_in_reply_to 
+    |> buffer_unpacker 
+    |> sentinel_is_none Int64.zero
+let post_get_next_reply = 
+    get_post_next_reply
+    |> buffer_unpacker 
+    |> sentinel_is_none Int64.zero
+
+let post_set_created_on = buffer_packer set_post_created_on 
+let post_set_prev_post_by_author = buffer_packer set_post_prev_post_by_author 
+let post_set_prev_revision = buffer_packer set_post_prev_revision
+let post_set_next_revision = buffer_packer set_post_next_revision
+let post_set_in_reply_to = buffer_packer set_post_in_reply_to
+let post_set_next_reply = buffer_packer set_post_next_reply
+
+let post_get_prev_post_by_topic buf topic = 
+    let st = Cstruct.of_bigarray buf in 
+    let n_topics = get_post_n_topics st in 
+    let offset = get_post_topics_offset st |> Int32.to_int in 
+    let ids_offset = offset + (n_topics * 4) in 
+    let rec find_prev_topic idx = 
+        if idx >= n_topics then None 
+        else
+            let target_topic = LittleEndian.get_int32 buf (offset + (idx * 4)) in 
+            if topic == target_topic then 
+                Some (LittleEndian.get_int64 buf (ids_offset + (idx * 8)))
+            else
+                find_prev_topic (idx + 1) in
+    find_prev_topic 0
 
 let post_with_attachments buf attachments = 
     let n_attachments = Array.length attachments in 
@@ -382,7 +445,7 @@ let create_post_buffer post : Bigstring.t =
     let res = buffer_builder_create sizeof_post in 
     let res = post_with_author res post.author in 
     let res = match post.content with | None -> res | Some v -> post_with_content res v in 
-    let res = post_with_topics res post.topics in 
+    let res = post_with_topics res post.topics post.prev_posts_by_topic in 
     let res = post_with_attachments res post.attachments in (
         set_post_created_on res.st post.created_on;
         (match post.prev_post_by_author with 

@@ -1,0 +1,6 @@
+(library
+    (name models)
+    (libraries lmdb pwhash crc lwt lwt.unix cstruct cstruct-lwt bigarray bigstring batteries stdint chibibb.util oseq)
+    (preprocess
+        (pps lwt_ppx ppx_cstruct))
+    (flags :standard -w -53-55))
