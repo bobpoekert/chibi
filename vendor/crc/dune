@@ -1,0 +1,7 @@
+(library
+  (name crc)
+  (flags (:standard))
+  (foreign_stubs
+    (language c)
+    (names crc_stubs))
+  (libraries cstruct))

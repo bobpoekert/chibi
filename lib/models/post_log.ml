@@ -1,4 +1,3 @@
-open Crc
 open Chibi_util
 
 (*
@@ -44,7 +43,7 @@ exception Corrupt of data_corrupt
 let correct_magic_number = EndianString.LittleEndian.get_int32 "FLOG" 0
 
 let get_checksum data = 
-    Crc32.string (Bigstring.to_string data) 0 (Bigstring.length data)
+    Crc.unsafe_crc32_cstruct 0l data 0 (Bigstring.length data)
 
 let get_post_header l offset = 
     let header_offset = offset - sizeof_log_header in 
@@ -82,7 +81,7 @@ let prev_entry_id l offset =
 
 let append_log_entry flog entry_type blob = 
     let length = Bigstring.length blob in 
-    let checksum = Crc32.string (Bigstring.to_string blob) 0 length in 
+    let checksum = get_checksum blob in 
     let res = Bigstring.create (length + sizeof_log_header) in 
     let header = Cstruct.of_bigarray ~off:length ~len:sizeof_log_header res in (
         Bigstring.blit blob 0 res 0 length;
@@ -93,32 +92,16 @@ let append_log_entry flog entry_type blob =
         Log.append flog res
     )
 
-let rec update_log_entry updater flog offset = 
+let update_locked_log_entry_inplace updater flog offset = 
     let header_offset = offset - sizeof_log_header in 
     let header_blob = Log.read flog header_offset sizeof_log_header in
     let header_st = Cstruct.of_bigarray header_blob in 
-    let old_checksum = get_log_header_checksum header_st in
-    let header_blob = Cstruct.of_bigarray header_blob in 
-    let entry_length = get_log_header_length header_blob |> Int64.to_int in 
-    let entry_start = header_offset - entry_length in 
-    let entry_blob = Log.read flog entry_start entry_length in 
-    let newval = updater entry_blob in 
-    if (Bigstring.length newval) != entry_length then
-        raise (Failure "log entries cannot change size")
-    else
-        let new_checksum = get_checksum newval in
-        let _ = set_log_header_checksum header_blob new_checksum in 
-        let write_buffer = Bigstring.create (entry_length + sizeof_log_header) in 
-        let _ = Bigstring.blit newval 0 write_buffer 0 entry_length in 
-        let _ = Bigstring.blit (Cstruct.to_bigarray header_blob) 0 write_buffer entry_length sizeof_log_header in 
-        (* CAS loop in case we got beaten to the write *)
-        Log.with_write_lock (fun () -> 
-            let new_header_blob = Log.read flog header_offset sizeof_log_header in
-            let new_header_st = Cstruct.of_bigarray new_header_blob in 
-            let check_checksum = get_log_header_checksum new_header_st in 
-            if check_checksum != old_checksum then
-                (* CAS retry *)
-                update_log_entry updater flog offset 
-            else
-                Log.overwrite flog write_buffer header_offset
-        ) flog
+    let body_size = get_log_header_length header_st |> Int64.to_int in 
+    let whole_entry = Bigstring.sub (Log.get_buffer flog)
+        (offset  - sizeof_log_header - body_size)
+        (body_size + sizeof_log_header) in
+    let body = Bigstring.sub whole_entry 0 (body_size - sizeof_log_header) in
+    updater header_st body;
+    set_log_header_checksum header_st (get_checksum body)
+
+

@@ -23,7 +23,8 @@ let update_by_name name thunk =
     Lmdb.Txn.go Lmdb.Rw App_state.state.db (fun txn -> 
         let prev = Lmdb.Map.get ~txn:txn users_table name in 
         let next = thunk prev in 
-        Lmdb.Map.set ~txn:txn users_table name next
+        let _ = Lmdb.Map.set ~txn:txn users_table name next in 
+        next
     )
 
 

@@ -7,6 +7,9 @@ type mapped_file = {
     buffer : Bigstring.t
 }
 
+let get_buffer f = f.buffer 
+let get_fd f = f.fd
+
 let map_file size fname : mapped_file = 
     let fd = Unix.openfile fname [Unix.O_RDWR; Unix.O_CREAT; Unix.O_APPEND] 0o660 in 
     let _ = Unix.ftruncate fd size in 

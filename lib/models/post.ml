@@ -4,6 +4,8 @@ open OSeq
 type t = (int * Bigstring.t)
 type schema = Schema.post
 
+let default_t = (0, Bigstring.create 0)
+
 let gets_post_content (thunk:Bigstring.t -> 'a) : (t -> 'a)= 
     (fun (_id, content) -> thunk content)
 let gets_post_id (thunk:int -> 'a) : (t -> 'a)= 
@@ -15,24 +17,40 @@ let get_attachments = gets_post_content Schema.post_get_attachments
 let get_topics = gets_post_content Schema.post_get_topics 
 let get_created_on = gets_post_content Schema.post_get_created_on
 
-let create (post:schema) : t = 
+let create (post:schema) : t =
+    (*
+    
+        parent references we need to update when we add a log entry:
+        - if this is an update, next_revision of prev entry (updates not implemented yet)
+        - if this is a reply, next_reply of in_reply_to
+        
+        lmdb entries we need to update:
+        - last_post_id of author
+        - offset for each topic
+
+    *)
     Log.with_write_lock (fun () -> 
-        let author_state = match User.find_by_name post.author with 
-        | None -> raise (Failure "author not found") 
-        | Some author -> author in 
-        let old_head_id = Schema.user_get_last_post_id author_state in
-
-        let post = {post with prev_post_by_author = old_head_id;} in
-
-        let buf = Schema.create_post_buffer post in 
-        let new_id = Post_log.append_log_entry
-            App_state.state.post_log
-            Post_log.POST
-            buf in 
+        let res = ref default_t in 
         let _ = User.update_by_name post.author (fun author_state -> 
-            Schema.user_set_last_post_id author_state (Int64.of_int new_id); author_state
-        ) in 
-        (new_id, buf)
+            let old_head_id = Schema.user_get_last_post_id author_state in
+
+            let post = {post with prev_post_by_author = old_head_id;} in
+
+            let buf = Schema.create_post_buffer post in 
+            let new_id = Post_log.append_log_entry
+                App_state.state.post_log
+                Post_log.POST
+                buf in
+
+            (match post.in_reply_to with 
+            | None -> ()
+            | Some parent_id -> let _ = Post_log.update_locked_log_entry_inplace (fun _header body -> 
+                Schema.post_set_next_reply body parent_id;
+            ) App_state.state.post_log (Int64.to_int parent_id) in ());
+            Schema.user_set_last_post_id author_state (Int64.of_int new_id);
+            res := (new_id, author_state);
+            author_state
+        ) in !res
     ) App_state.state.post_log
 
 let rec find_by_id id : t option = 
