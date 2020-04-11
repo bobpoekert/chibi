@@ -76,6 +76,7 @@ let string_getter a b =
         | Some v -> Some (Bigstring.to_string v)
         | None -> None
 
+(* unused 
 let array_getter offset_getter length_getter int_default int_width unpacker = 
     fun blob ->
         let st = Cstruct.of_bigarray blob in
@@ -88,6 +89,7 @@ let array_getter offset_getter length_getter int_default int_width unpacker =
             done; 
             res
         )
+*)
 
 type buffer_builder = {
     st: Cstruct.t;
@@ -210,7 +212,7 @@ let default_user = {
     user_type = LOCAL;
 }
 
-let create_user_buffer user : Cstruct.buffer =
+let create_user_buffer user created_on : Cstruct.buffer =
 
     let res = buffer_builder_create sizeof_user in 
     let res = user_with_name res user.name in 
@@ -221,6 +223,7 @@ let create_user_buffer user : Cstruct.buffer =
         (
             set_user_user_type st (user_type_to_int user.user_type);
             set_user_version st user_version;
+            set_user_created_on st created_on;
             match user.avatar_id with | None -> () | Some v -> set_user_avatar_id st v;
             match user.password_hash with 
             | Some h -> set_user_password_hash h 0 st
@@ -269,9 +272,19 @@ type post = {
     (* topics are arrays of uint32 id's and prev post pointers *)    
     n_topics: uint16_t;
     topics_offset: uint32_t;
+    topics_length: uint32_t;
 
     in_reply_to: uint64_t;
-    next_reply: uint64_t;
+
+    (* this is a linked list that represents the immediate children of
+     a given post in the reply tree. 
+     when adding a reply b to a parent a,
+     b's prev_revision is the last entry in a's child list, and b's in_reply_to is a
+     *)
+    reply_child_list_prev: uint64_t;
+
+    (* the first node in the reply list for children of this node *)
+    reply_child_list_head: uint64_t;
 
     next_revision: uint64_t;
     prev_revision: uint64_t;
@@ -284,15 +297,17 @@ type post = {
 [@@little_endian]]
 
 type post = {
-    created_on : int64;
     author : string;
     content : string option;
     attachments : attachment_record array;
     prev_post_by_author : int64 option;
-    topics : int32 array;
+    topics : string array;
     prev_posts_by_topic : int64 array;
     in_reply_to : int64 option;
-    next_reply : int64 option;
+
+    reply_child_list_prev : int64 option;
+    reply_child_list_head : int64 option;
+
     deleted_on : int64 option;
 }
 
@@ -327,10 +342,16 @@ let post_get_attachments blob =
             ) in 
         collect_attachments 0 offset; res
 
-let post_get_topics = array_getter
-    (get_post_topics_offset %> Int32.to_int)
-    get_post_n_topics
-    Int32.zero 4 LittleEndian.get_int32
+let post_get_topics buf = 
+    let st = Cstruct.of_bigarray buf in 
+    let start = get_post_topics_offset st |> Int32.to_int in 
+    let n_topics = get_post_n_topics st  in 
+    let pointers_size = n_topics * 4 in 
+    let string_start = start + pointers_size in 
+    let string_size = (get_post_topics_length st |> Int32.to_int) - pointers_size in 
+    let string = Bigstring.to_string (Bigstring.sub buf string_start string_size) in 
+    String.split_on_char '\x00' string
+
 
 let post_with_author = string_setter 
     (make_int32_arg_int set_post_author_offset)
@@ -342,13 +363,29 @@ let post_with_content = string_setter
 let post_with_topics builder topics prev_ids = 
     let n_topics = Array.length topics in 
     if n_topics != (Array.length prev_ids) then raise (Failure "topic arrays don't match") else
-    let buffer_size = (n_topics * 4) + (n_topics * 8) in 
-    let ids_start = n_topics * 4 in 
-    let buffer = Bigstring.create buffer_size in (
+    let strings_size = (Array.fold_left (fun a b -> a + (String.length b)) 0 topics) + n_topics in
+    let buffer_size = strings_size + (n_topics * 8) in 
+    let buffer = Bigstring.create buffer_size in
+    let strings_start = buffer_size - strings_size in 
+    let rec copy_strings idx off = 
+        if idx >= n_topics then () else (
+            let s = (Array.get topics idx) in 
+            let sl = String.length s in 
+            Bigstring.blit_of_string
+                s 0
+                buffer off 
+                sl;
+            Bigstring.set buffer (off + sl) '\x00';
+            copy_strings (idx + 1) (off + sl + 1)
+        ) in
+     (
         for i = 0 to n_topics do 
-            LittleEndian.set_int32 buffer (i * 4) (Array.get topics i);
-            LittleEndian.set_int64 buffer (ids_start + i * 8) (Array.get prev_ids i);
+            LittleEndian.set_int64 buffer (i * 8) (Array.get prev_ids i);
         done;
+        set_post_n_topics builder.st n_topics;
+        set_post_topics_length builder.st (Int32.of_int buffer_size);
+        set_post_topics_offset builder.st (Int32.of_int builder.size);
+        copy_strings 0 strings_start;
         {
             st = builder.st;
             size = builder.size + buffer_size;
@@ -368,8 +405,12 @@ let post_get_in_reply_to =
     get_post_in_reply_to 
     |> buffer_unpacker 
     |> sentinel_is_none Int64.zero
-let post_get_next_reply = 
-    get_post_next_reply
+let post_get_reply_child_list_prev = 
+    get_post_reply_child_list_prev
+    |> buffer_unpacker 
+    |> sentinel_is_none Int64.zero
+let post_get_reply_child_list_head = 
+    get_post_reply_child_list_head
     |> buffer_unpacker 
     |> sentinel_is_none Int64.zero
 
@@ -378,23 +419,22 @@ let post_set_prev_post_by_author = buffer_packer set_post_prev_post_by_author
 let post_set_prev_revision = buffer_packer set_post_prev_revision
 let post_set_next_revision = buffer_packer set_post_next_revision
 let post_set_in_reply_to = buffer_packer set_post_in_reply_to
-let post_set_next_reply = buffer_packer set_post_next_reply
 let post_set_subscription_id = buffer_packer set_post_subscription_id
+let post_set_reply_child_list_head = buffer_packer set_post_reply_child_list_head
 
-let post_get_prev_post_by_topic buf topic = 
-    let st = Cstruct.of_bigarray buf in 
-    let n_topics = get_post_n_topics st in 
-    let offset = get_post_topics_offset st |> Int32.to_int in 
-    let ids_offset = offset + (n_topics * 4) in 
-    let rec find_prev_topic idx = 
-        if idx >= n_topics then None 
-        else
-            let target_topic = LittleEndian.get_int32 buf (offset + (idx * 4)) in 
-            if topic == target_topic then 
-                Some (LittleEndian.get_int64 buf (ids_offset + (idx * 8)))
+let post_get_prev_post_by_topic buf topic =
+    (* TODO: write this as a loop over chars instead of doing string split *)
+    let topics = post_get_topics buf in 
+    let off = get_post_topics_offset (Cstruct.of_bigarray buf) |> Int32.to_int in 
+    let rec find_topic idx lst = 
+        match lst with 
+        | [] -> None 
+        | target :: rst -> 
+            if target == topic then 
+                Some (LittleEndian.get_int64 buf (off + (idx * 8)))
             else
-                find_prev_topic (idx + 1) in
-    find_prev_topic 0
+                find_topic (idx + 1) rst in 
+    find_topic 0 topics
 
 let post_with_attachments buf attachments = 
     let n_attachments = Array.length attachments in 
@@ -419,22 +459,25 @@ let post_with_attachments buf attachments =
         }
     )
 
-let create_post_buffer post : Bigstring.t = 
+let create_post_buffer post created_on : Bigstring.t = 
     let res = buffer_builder_create sizeof_post in 
     let res = post_with_author res post.author in 
     let res = match post.content with | None -> res | Some v -> post_with_content res v in 
     let res = post_with_topics res post.topics post.prev_posts_by_topic in 
     let res = post_with_attachments res post.attachments in (
-        set_post_created_on res.st post.created_on;
+        set_post_created_on res.st created_on;
         (match post.prev_post_by_author with 
         | None -> ()
         | Some v -> set_post_prev_post_by_author res.st v);
-        (match post.in_reply_to with 
-        | None -> () 
-        | Some v -> set_post_in_reply_to res.st v);
         (match post.deleted_on with 
         | None -> () 
         | Some v -> set_post_deleted_on res.st v);
+        (match post.reply_child_list_prev with 
+        | None -> () 
+        | Some v -> set_post_reply_child_list_prev res.st v);
+        (match post.reply_child_list_head with 
+        | None -> () 
+        | Some v -> set_post_reply_child_list_head res.st v);
 
         buffer_builder_pack res
     )

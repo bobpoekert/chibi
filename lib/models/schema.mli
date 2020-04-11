@@ -39,7 +39,7 @@ val user_get_type : Cstruct.buffer -> user_type option
 
 val user_set_created_on : Cstruct.buffer -> int64 -> unit
 
-val create_user_buffer : user -> Cstruct.buffer
+val create_user_buffer : user -> int64 -> Cstruct.buffer
 
 (* posts *)
 
@@ -50,40 +50,43 @@ type attachment_record = {
 }
 
 type post = {
-    created_on : int64;
     author : string;
     content : string option;
     attachments : attachment_record array;
     prev_post_by_author : int64 option;
-    topics : int32 array;
+    topics : string array;
     prev_posts_by_topic : int64 array;
     in_reply_to : int64 option;
-    next_reply : int64 option;
+    reply_child_list_prev : int64 option;
+    reply_child_list_head : int64 option;
     deleted_on : int64 option;
 }
 
 val post_get_author : Bigstring.t -> string option
 val post_get_content : Bigstring.t -> string option 
 val post_get_attachments : Bigstring.t -> attachment_record array
-val post_get_topics : Bigstring.t -> int32 array 
+val post_get_topics : Bigstring.t -> string list
+val post_get_prev_post_by_topic : Bigstring.t -> string -> int64 option
 val post_get_created_on : Bigstring.t -> int64
 val post_get_prev_revision : Bigstring.t -> int64
 val post_get_next_revision : Bigstring.t -> int64
 val post_get_prev_post_by_author : Bigstring.t -> int64
-val post_get_prev_post_by_topic : Bigstring.t -> int32 -> int64 option
 val post_get_in_reply_to : Bigstring.t -> int64 option 
-val post_get_next_reply : Bigstring.t -> int64 option
 val post_get_subscription_id : Bigstring.t -> int64 option
+
+val post_get_reply_child_list_prev : Bigstring.t -> int64 option 
+val post_get_reply_child_list_head : Bigstring.t -> int64 option 
+
 
 val post_set_created_on : Bigstring.t -> int64 -> unit 
 val post_set_prev_post_by_author : Bigstring.t -> int64 -> unit 
 val post_set_prev_revision : Bigstring.t -> int64 -> unit 
 val post_set_next_revision : Bigstring.t -> int64 -> unit
 val post_set_in_reply_to : Bigstring.t -> int64 -> unit 
-val post_set_next_reply : Bigstring.t -> int64 -> unit
 val post_set_subscription_id : Bigstring.t -> int64 -> unit
+val post_set_reply_child_list_head : Bigstring.t -> int64 -> unit
 
-val create_post_buffer : post -> Bigstring.t
+val create_post_buffer : post -> int64 -> Bigstring.t
 
 type subscription_type = 
 | RSS 

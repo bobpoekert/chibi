@@ -1,5 +1,6 @@
 open Chibi_util
 
+
 (*
 
 This is an implementation of an append-only log that acts as a database for feed data. 
@@ -22,7 +23,11 @@ type log_entry_type =
 | POST 
 | LIKE 
 | USER
+| SUBSCRIPTION
+| UNKNOWN
 [@@uint16_t]]
+
+type log_entry = (int * log_entry_type * Bigstring.t)
 
 (* NOTE: if you move or remove any of these fields you break compatibility with existing databases *)
 [%%cstruct 
@@ -37,6 +42,7 @@ type log_header = {
 type data_corrupt = 
 | Bad_magic_number 
 | Bad_checksum
+| Bad_id
 
 exception Corrupt of data_corrupt
 
@@ -55,6 +61,7 @@ let rec inner_read_log_entry offset l ctr =
     let offset = match offset with 
         | Some o -> o 
         | None -> Log.end_off l in 
+    if offset == 0 then raise (Corrupt Bad_id) else 
     let header_blob = get_post_header l offset in
     let header_offset = offset - sizeof_log_header in 
 
@@ -62,6 +69,9 @@ let rec inner_read_log_entry offset l ctr =
     if magic != correct_magic_number then raise (Corrupt Bad_magic_number) else
     let checksum = get_log_header_checksum header_blob in 
     let entry_type = get_log_header_entry_type header_blob |> int_to_log_entry_type in 
+    let entry_type = match entry_type with 
+    | Some v -> v 
+    | None -> UNKNOWN in
     let entry_length = get_log_header_length header_blob |> Int64.to_int in 
     let entry_blob = Log.read l (header_offset - entry_length) entry_length in 
     
@@ -104,4 +114,24 @@ let update_locked_log_entry_inplace updater flog offset =
     updater header_st body;
     set_log_header_checksum header_st (get_checksum body)
 
+let find_by_id id : (log_entry_type * Bigstring.t) = 
+    let l = App_state.state.post_log in 
+    read_log_entry ~offset:id l
 
+let rec links_seq (getter:int -> log_entry_type -> Bigstring.t -> int option) id = 
+    (fun () -> 
+        let typ, post = find_by_id id in
+        match getter id typ post with 
+        | None -> Seq.Nil 
+        | Some next_id -> 
+            Seq.Cons ((id, typ, post), links_seq getter next_id)
+    )
+
+let all_before = links_seq (fun id _type _content-> 
+    prev_entry_id App_state.state.post_log id
+)
+
+(* the id of an entry is an offset to the end of the entry, 
+   so the end of the log is the id of the last entry in the log
+   *)
+let all () = all_before (Log.end_off App_state.state.post_log)

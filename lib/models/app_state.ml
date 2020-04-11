@@ -92,7 +92,7 @@ let add_attachment data =
         Log.append state.attachment_log blob
     )
 
-let get_offset k = Lmdb.Map.get state.offsets k
+let get_offset k = try Some (Lmdb.Map.get state.offsets k) with Not_found -> None
 let set_offset k v = Lmdb.Map.set state.offsets k v
 
 let offset_getter format_string = 

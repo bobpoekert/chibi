@@ -31,11 +31,30 @@ let create (post:schema) : t =
 
     *)
     Log.with_write_lock (fun () -> 
+        let created_on = Unix.time () |> Int64.of_float in 
         let old_head_id = App_state.get_user_offset post.author in
 
-        let post = {post with prev_post_by_author = Some old_head_id;} in
+        let post = {post with prev_post_by_author = old_head_id;} in
 
-        let buf = Schema.create_post_buffer post in 
+
+        let old_topic_heads = Array.map (fun topic -> 
+            match App_state.get_topic_offset topic with 
+            | None -> Int64.zero 
+            | Some v -> v
+        ) post.topics in
+
+        let post = {post with prev_posts_by_topic = old_topic_heads;} in
+
+        let prev = match post.in_reply_to with 
+        | None -> None
+        | Some parent_id ->
+            let _, parent = Post_log.find_by_id (Int64.to_int parent_id) in 
+            match Schema.post_get_reply_child_list_head parent with
+            | Some old_head -> Some old_head
+            | None -> None
+        in
+        let post = {post with reply_child_list_prev = prev;} in
+        let buf = Schema.create_post_buffer post created_on in 
         let new_id = Post_log.append_log_entry
             App_state.state.post_log
             Post_log.POST
@@ -43,90 +62,95 @@ let create (post:schema) : t =
 
         (match post.in_reply_to with 
         | None -> ()
-        | Some parent_id -> let _ = Post_log.update_locked_log_entry_inplace (fun _header body -> 
-            Schema.post_set_next_reply body parent_id;
-        ) App_state.state.post_log (Int64.to_int parent_id) in ());
+        | Some parent_id -> 
+            Post_log.update_locked_log_entry_inplace (fun _st buf -> 
+                Schema.post_set_reply_child_list_head buf (Int64.of_int new_id)
+            ) App_state.state.post_log (Int64.to_int parent_id));
+
+        Array.iter (fun topic -> 
+            App_state.set_topic_offset topic (Int64.of_int new_id);
+        ) post.topics;
 
         App_state.set_user_offset post.author (Int64.of_int new_id);
 
         (new_id, buf)
     ) App_state.state.post_log
 
-let rec find_by_id id : t option = 
-    if id == 0 then None else
-    let l = App_state.state.post_log in 
-    let typ, blob = Post_log.read_log_entry ~offset:id l in
-    match typ with 
-    | None -> None
-    | Some typ ->  
-    match typ with 
-    | Post_log.LIKE -> None
-    | Post_log.USER -> None
-    | Post_log.POST -> 
+let rec find_by_id id = 
+    match Post_log.find_by_id id with 
+    | (Post_log.POST, blob) -> 
         let next = Schema.post_get_next_revision blob |> Int64.to_int in 
         if next != 0 then find_by_id next
-        else Some (id, blob) 
+        else Some (id, blob)
+    | _ -> None
 
-let rec links_seq (getter:t -> int option) id = 
-    (fun () -> 
-        match find_by_id id with
-        | None -> Seq.Nil
-        | Some post -> 
-            match getter post with 
-            | None -> Seq.Nil 
-            | Some next_id -> 
-                Seq.Cons (post, links_seq getter next_id)
-    )
 
 let returns_some f = (fun v -> Some (f v))
 
 let retruns_i64_int f = (fun x -> Int64.to_int (f x))
 
-let getter_seq g = 
-    g
-    |> retruns_i64_int 
-    |> gets_post_content 
-    |> returns_some
-    |> links_seq
+let posts_seq entries = 
+    filter_map (fun (id, typ, buf) -> 
+        match typ with 
+        | Post_log.POST -> Some (id, buf)
+        | _ -> None
+    ) entries
+
+let getter_seq (g:Bigstring.t -> int64) start_id : t Seq.t = 
+    Post_log.links_seq (fun _id typ buf -> 
+        match typ with 
+        | Post_log.POST -> Some (Int64.to_int (g buf))
+        | _ -> None
+    ) start_id
+    |> posts_seq
 
 let all_with_author_id = getter_seq Schema.post_get_prev_post_by_author
 let all_with_author user = 
     try (
-        App_state.get_user_offset user 
-        |> Int64.to_int
-        |> all_with_author_id 
-    ) with Not_found -> (fun () -> Seq.Nil)
+        match App_state.get_user_offset user with
+        | None -> empty 
+        | Some user -> all_with_author_id (Int64.to_int user)
+    ) with Not_found -> empty
 
 
 let all_revisions = getter_seq Schema.post_get_prev_revision
-let all_with_topic start_id topic_id = 
+let all_with_topic topic = 
     let rec seq_fn post_id = 
         (fun () -> 
-            match find_by_id post_id with 
-            | None -> Seq.Nil 
-            | Some post -> 
-                let _id, pbuf = post in 
-                match Schema.post_get_prev_post_by_topic pbuf topic_id with 
-                | None -> Seq.Nil 
-                | Some next_id -> Seq.Cons (post, seq_fn (Int64.to_int next_id))
+            match Post_log.find_by_id post_id with 
+            | (Post_log.POST, pbuf) -> (
+                match Schema.post_get_prev_post_by_topic pbuf topic with 
+                | None -> Seq.Cons ((post_id, pbuf), empty)
+                | Some next_id -> Seq.Cons ((post_id, pbuf), seq_fn (Int64.to_int next_id))
+            )
+            | _ -> Seq.Nil
         )in
-    seq_fn start_id
+    match App_state.get_topic_offset topic with 
+    | None -> empty 
+    | Some start_id -> seq_fn (Int64.to_int start_id)
 
-(* gets the reply thread rooted at the given post *)
-let reply_thread_downward = links_seq (fun (_post_id, pbuf) -> 
-    match Schema.post_get_next_reply pbuf with 
-    | None -> None 
-    | Some v -> Some (Int64.to_int v)
-)
+let get_immediate_replies root = 
+    let _root_id, root_buf = root in 
+    match Schema.post_get_reply_child_list_head root_buf with 
+    | None -> (fun () -> Seq.Nil)
+    | Some head -> Post_log.links_seq (fun _id entry_type entry -> 
+        match entry_type with 
+        | Post_log.POST -> (
+            match Schema.post_get_reply_child_list_prev entry with 
+            | None -> None 
+            | Some v -> Some (Int64.to_int v)
+        )
+        | _ -> None
+    ) (Int64.to_int head)
+    |> posts_seq
 
-let all_before = links_seq (fun (id, _content) -> 
-    Post_log.prev_entry_id App_state.state.post_log id
-)
+type reply_tree = Reply_node of (t * reply_tree Seq.t)
 
-(* the id of an entry is an offset to the end of the entry, 
-   so the end of the log is the id of the last entry in the log
-   *)
-let all () = all_before (Log.end_off App_state.state.post_log)
+let rec get_reply_tree v : reply_tree = 
+    Reply_node (
+        v, 
+        map get_reply_tree (get_immediate_replies v)
+    )
 
 let before_timestamp timestamp s =
     s

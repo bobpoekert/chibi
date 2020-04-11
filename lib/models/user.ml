@@ -12,7 +12,8 @@ let users_table =
 let default = Schema.default_user
 
 let create (user:schema) : t =
-    let buf = Schema.create_user_buffer user in
+    let created_on = Unix.time () |> Int64.of_float in 
+    let buf = Schema.create_user_buffer user created_on in
     Lmdb.Map.set users_table user.name buf; buf
 
 let find_by_name name : t option = 
