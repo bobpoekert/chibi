@@ -52,12 +52,9 @@ type user = {
     signature_offset: uint32_t;
     signature_length: uint32_t;
     avatar_id: uint64_t;
-    last_post_id: uint64_t;
     user_type: uint8_t;
     remote_uri_offset: uint32_t;
     remote_uri_length: uint32_t;
-    last_update_time: uint64_t;
-    update_interval: uint64_t;
 
     (* version 2 will go here *)
 } [@@little_endian]]
@@ -164,9 +161,6 @@ let user_get_bio = string_getter
 let user_get_signature = string_getter 
     (get_user_signature_offset %> Int32.to_int)
     (get_user_signature_length %> Int32.to_int)
-let user_get_remote_uri = string_getter
-    (get_user_remote_uri_offset %> Int32.to_int)
-    (get_user_remote_uri_length %> Int32.to_int)
 
 let buffer_unpacker field_unpacker = 
     (fun (buf:Cstruct.buffer) -> field_unpacker (Cstruct.of_bigarray buf))
@@ -177,17 +171,8 @@ let sentinel_is_none sentinel f =
     (fun v -> let res = f v in if res == sentinel then None else Some res)
 
 let user_get_created_on = buffer_unpacker get_user_created_on 
-let user_get_last_update_time = buffer_unpacker get_user_last_update_time
-let user_get_update_interval = buffer_unpacker get_user_update_interval
-let user_get_last_post_id = 
-    get_user_last_post_id
-    |> buffer_unpacker 
-    |> sentinel_is_none Int64.zero
 
 let user_set_created_on = buffer_packer set_user_created_on 
-let user_set_last_update_time = buffer_packer set_user_last_update_time
-let user_set_update_interval = buffer_packer set_user_update_interval
-let user_set_last_post_id = buffer_packer set_user_last_post_id
 
 let user_get_type buf = 
     Cstruct.of_bigarray buf
@@ -205,7 +190,6 @@ let string_setter_int32 o l = string_setter
 let user_with_name = string_setter_int32 set_user_name_offset set_user_name_length 
 let user_with_bio = string_setter_int32 set_user_bio_offset set_user_bio_length 
 let user_with_signature = string_setter_int32 set_user_signature_offset set_user_signature_length 
-let user_with_remote_uri = string_setter_int32 set_user_remote_uri_length set_user_remote_uri_offset
 
 
 type user = {
@@ -213,9 +197,6 @@ type user = {
     bio : string option;
     signature : string option;
     avatar_id : int64 option;
-    last_post_id : int64 option;
-    remote_uri : string option;
-    update_interval : int64 option;
     name : string;
     user_type : user_type;
 }
@@ -225,9 +206,6 @@ let default_user = {
     bio = None;
     signature = None;
     avatar_id = None;
-    last_post_id = None;
-    remote_uri = None;
-    update_interval = None;
     name = "";
     user_type = LOCAL;
 }
@@ -238,19 +216,12 @@ let create_user_buffer user : Cstruct.buffer =
     let res = user_with_name res user.name in 
     let res = match user.bio with | Some bio -> user_with_bio res bio | None -> res in 
     let res = match user.signature with | Some s -> user_with_signature res s | None -> res in 
-    let res = match user.remote_uri with | Some u -> user_with_remote_uri res u | None -> res in 
 
     let st = res.st in (
         (
             set_user_user_type st (user_type_to_int user.user_type);
             set_user_version st user_version;
             match user.avatar_id with | None -> () | Some v -> set_user_avatar_id st v;
-            match user.last_post_id with 
-            | None -> ()
-            | Some v -> set_user_last_post_id st v;
-            match user.update_interval with 
-            | None -> () 
-            | Some v -> set_user_update_interval st v;
             match user.password_hash with 
             | Some h -> set_user_password_hash h 0 st
             | None -> ()
@@ -306,6 +277,8 @@ type post = {
     prev_revision: uint64_t;
 
     deleted_on: uint64_t;
+
+    subscription_id: uint64_t;
 
 }
 [@@little_endian]]
@@ -387,6 +360,10 @@ let post_get_created_on = buffer_unpacker get_post_created_on
 let post_get_prev_post_by_author = buffer_unpacker get_post_prev_post_by_author 
 let post_get_prev_revision = buffer_unpacker get_post_prev_revision
 let post_get_next_revision = buffer_unpacker get_post_next_revision
+let post_get_subscription_id =
+    buffer_unpacker
+    (sentinel_is_none Int64.zero get_post_subscription_id)
+
 let post_get_in_reply_to = 
     get_post_in_reply_to 
     |> buffer_unpacker 
@@ -402,6 +379,7 @@ let post_set_prev_revision = buffer_packer set_post_prev_revision
 let post_set_next_revision = buffer_packer set_post_next_revision
 let post_set_in_reply_to = buffer_packer set_post_in_reply_to
 let post_set_next_reply = buffer_packer set_post_next_reply
+let post_set_subscription_id = buffer_packer set_post_subscription_id
 
 let post_get_prev_post_by_topic buf topic = 
     let st = Cstruct.of_bigarray buf in 
@@ -460,3 +438,79 @@ let create_post_buffer post : Bigstring.t =
 
         buffer_builder_pack res
     )
+
+[%%cenum 
+type subscription_type = 
+| RSS 
+| ATOM
+| ACTIVITYPUB
+| EMAIL
+| TWITTER_ACCOUNT
+| YOUTUBE_CHANNEL
+| SOUNDCLOUD_CHANNEL
+[@@uint16_t]]
+
+[%%cstruct 
+type subscription = {
+    created_on: uint64_t;
+    subscription_type: uint16_t;
+
+    created_by_offset: uint32_t;
+    created_by_length: uint32_t;
+
+    uri_offset: uint32_t;
+    uri_length: uint32_t;
+
+    most_recent_post_id: uint64_t;
+
+    next_check_timestamp: uint64_t;
+
+}
+[@@little_endian]]
+
+type subscription = {
+    created_on: int64;
+    subscription_type: subscription_type;
+    created_by: string;
+    uri: string;
+    most_recent_post_id: int64 option;
+    next_check_timestamp: int64;
+}
+
+let subscription_with_created_by = string_setter 
+    (make_int32_arg_int set_subscription_created_by_offset)
+    (make_int32_arg_int set_subscription_created_by_length)
+let subscription_with_uri = string_setter 
+    (make_int32_arg_int set_subscription_uri_offset)
+    (make_int32_arg_int set_subscription_uri_length)
+
+let create_subscription_buffer (inp:subscription) : Bigstring.t =
+    let res = buffer_builder_create sizeof_subscription in 
+    let res = subscription_with_created_by res inp.created_by in 
+    let res = subscription_with_uri res inp.uri in (
+        set_subscription_created_on res.st inp.created_on;
+        set_subscription_subscription_type res.st
+            (subscription_type_to_int inp.subscription_type);
+        set_subscription_next_check_timestamp res.st inp.next_check_timestamp;
+        (match inp.most_recent_post_id with 
+        | None -> () 
+        | Some id -> set_subscription_most_recent_post_id res.st id);
+        buffer_builder_pack res
+    )
+
+let subscription_get_created_on = buffer_unpacker get_subscription_created_on
+let subscription_get_next_check_timestamp = buffer_unpacker get_subscription_next_check_timestamp
+let subscription_get_created_by = string_getter
+    (get_subscription_created_by_offset %> Int32.to_int)
+    (get_subscription_created_by_length %> Int32.to_int)
+let subscription_get_uri = string_getter
+    (get_subscription_uri_offset %> Int32.to_int)
+    (get_subscription_uri_length %> Int32.to_int)
+let subscription_get_most_recent_post_id = 
+    get_subscription_most_recent_post_id
+    |> buffer_unpacker 
+    |> sentinel_is_none Int64.zero
+let subscription_get_subscription_type = 
+    get_subscription_subscription_type 
+    %> int_to_subscription_type
+    |> buffer_unpacker 

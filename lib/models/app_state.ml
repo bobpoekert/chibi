@@ -1,5 +1,6 @@
 open Chibi_util
 open EndianBigstring
+open BatPervasives
 
 type config_type = 
     | Int of int
@@ -93,6 +94,23 @@ let add_attachment data =
 
 let get_offset k = Lmdb.Map.get state.offsets k
 let set_offset k v = Lmdb.Map.set state.offsets k v
+
+let offset_getter format_string = 
+    (Printf.sprintf format_string)
+    %> get_offset
+
+let offset_setter format_string = 
+    (Printf.sprintf format_string)
+    %> set_offset
+
+let offset_pair format_string = (
+    offset_getter format_string,
+    offset_setter format_string
+)
+
+let get_user_offset, set_user_offset = offset_pair "user:%s"
+let get_topic_offset, set_topic_offset = offset_pair "topic:%s"
+
 
 let get_config_param = inner_get_config_param state.config_data 
 let set_config_param k v = Lmdb.Map.set state.config_data k v

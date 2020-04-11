@@ -24,9 +24,6 @@ type user = {
     bio : string option;
     signature : string option;
     avatar_id : int64 option;
-    last_post_id : int64 option;
-    remote_uri : string option;
-    update_interval : int64 option;
     name : string;
     user_type : user_type;
 }
@@ -36,18 +33,11 @@ val default_user : user
 val user_get_name : Cstruct.buffer -> string option 
 val user_get_bio : Cstruct.buffer -> string option 
 val user_get_signature : Cstruct.buffer -> string option 
-val user_get_remote_uri : Cstruct.buffer -> string option
 
 val user_get_created_on : Cstruct.buffer -> int64
-val user_get_last_update_time : Cstruct.buffer -> int64
-val user_get_update_interval : Cstruct.buffer -> int64
 val user_get_type : Cstruct.buffer -> user_type option
-val user_get_last_post_id : Cstruct.buffer -> int64 option
 
 val user_set_created_on : Cstruct.buffer -> int64 -> unit
-val user_set_last_update_time : Cstruct.buffer -> int64 -> unit
-val user_set_update_interval : Cstruct.buffer -> int64 -> unit
-val user_set_last_post_id : Cstruct.buffer -> int64 -> unit
 
 val create_user_buffer : user -> Cstruct.buffer
 
@@ -83,6 +73,7 @@ val post_get_prev_post_by_author : Bigstring.t -> int64
 val post_get_prev_post_by_topic : Bigstring.t -> int32 -> int64 option
 val post_get_in_reply_to : Bigstring.t -> int64 option 
 val post_get_next_reply : Bigstring.t -> int64 option
+val post_get_subscription_id : Bigstring.t -> int64 option
 
 val post_set_created_on : Bigstring.t -> int64 -> unit 
 val post_set_prev_post_by_author : Bigstring.t -> int64 -> unit 
@@ -90,8 +81,36 @@ val post_set_prev_revision : Bigstring.t -> int64 -> unit
 val post_set_next_revision : Bigstring.t -> int64 -> unit
 val post_set_in_reply_to : Bigstring.t -> int64 -> unit 
 val post_set_next_reply : Bigstring.t -> int64 -> unit
+val post_set_subscription_id : Bigstring.t -> int64 -> unit
 
 val create_post_buffer : post -> Bigstring.t
+
+type subscription_type = 
+| RSS 
+| ATOM
+| ACTIVITYPUB
+| EMAIL
+| TWITTER_ACCOUNT
+| YOUTUBE_CHANNEL
+| SOUNDCLOUD_CHANNEL
+
+type subscription = {
+    created_on: int64;
+    subscription_type: subscription_type;
+    created_by: string;
+    uri: string;
+    most_recent_post_id: int64 option;
+    next_check_timestamp: int64;
+}
+
+val subscription_get_created_on : Bigstring.t -> int64 
+val subscription_get_next_check_timestamp  : Bigstring.t -> int64 
+val subscription_get_created_by : Bigstring.t -> string option
+val subscription_get_uri : Bigstring.t -> string option
+val subscription_get_most_recent_post_id : Bigstring.t -> int64 option 
+val subscription_get_subscription_type : Bigstring.t -> subscription_type option
+
+val create_subscription_buffer : subscription -> Bigstring.t
 
 type 'a packer = Bigstring.t -> int -> 'a -> unit
 

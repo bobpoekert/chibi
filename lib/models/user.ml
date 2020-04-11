@@ -31,9 +31,6 @@ let update_by_name name thunk =
 let get_name = Schema.user_get_name
 let get_bio = Schema.user_get_bio
 let get_signature = Schema.user_get_signature
-let get_remote_uri = Schema.user_get_remote_uri
 
 let get_created_on = Schema.user_get_created_on 
-let get_last_update_time = Schema.user_get_last_update_time 
-let get_update_interval = Schema.user_get_update_interval 
 let get_type = Schema.user_get_type

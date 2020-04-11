@@ -17,8 +17,15 @@ val state : app_state
 val read_attachment : int -> Bigstring.t
 val add_attachment : Bigstring.t -> int
 
+(* getters here raise Not_found when offset does not exist *)
 val get_offset : string -> int64 
 val set_offset : string -> int64 -> unit
 
 val get_config_param : string -> config_type 
 val set_config_param : string -> config_type -> unit
+
+val get_user_offset : string -> int64
+val set_user_offset : string -> int64 -> unit 
+
+val get_topic_offset : string -> int64
+val set_topic_offset : string -> int64 -> unit

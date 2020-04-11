@@ -17,6 +17,7 @@ let get_attachments = gets_post_content Schema.post_get_attachments
 let get_topics = gets_post_content Schema.post_get_topics 
 let get_created_on = gets_post_content Schema.post_get_created_on
 
+
 let create (post:schema) : t =
     (*
     
@@ -30,27 +31,25 @@ let create (post:schema) : t =
 
     *)
     Log.with_write_lock (fun () -> 
-        let res = ref default_t in 
-        let _ = User.update_by_name post.author (fun author_state -> 
-            let old_head_id = Schema.user_get_last_post_id author_state in
+        let old_head_id = App_state.get_user_offset post.author in
 
-            let post = {post with prev_post_by_author = old_head_id;} in
+        let post = {post with prev_post_by_author = Some old_head_id;} in
 
-            let buf = Schema.create_post_buffer post in 
-            let new_id = Post_log.append_log_entry
-                App_state.state.post_log
-                Post_log.POST
-                buf in
+        let buf = Schema.create_post_buffer post in 
+        let new_id = Post_log.append_log_entry
+            App_state.state.post_log
+            Post_log.POST
+            buf in
 
-            (match post.in_reply_to with 
-            | None -> ()
-            | Some parent_id -> let _ = Post_log.update_locked_log_entry_inplace (fun _header body -> 
-                Schema.post_set_next_reply body parent_id;
-            ) App_state.state.post_log (Int64.to_int parent_id) in ());
-            Schema.user_set_last_post_id author_state (Int64.of_int new_id);
-            res := (new_id, author_state);
-            author_state
-        ) in !res
+        (match post.in_reply_to with 
+        | None -> ()
+        | Some parent_id -> let _ = Post_log.update_locked_log_entry_inplace (fun _header body -> 
+            Schema.post_set_next_reply body parent_id;
+        ) App_state.state.post_log (Int64.to_int parent_id) in ());
+
+        App_state.set_user_offset post.author (Int64.of_int new_id);
+
+        (new_id, buf)
     ) App_state.state.post_log
 
 let rec find_by_id id : t option = 
@@ -92,11 +91,11 @@ let getter_seq g =
 
 let all_with_author_id = getter_seq Schema.post_get_prev_post_by_author
 let all_with_author user = 
-    (fun () -> 
-        match Schema.user_get_last_post_id user with
-        | None -> Seq.Nil
-        | Some id -> (all_with_author_id (Int64.to_int id)) ()
-    )
+    try (
+        App_state.get_user_offset user 
+        |> Int64.to_int
+        |> all_with_author_id 
+    ) with Not_found -> (fun () -> Seq.Nil)
 
 
 let all_revisions = getter_seq Schema.post_get_prev_revision
