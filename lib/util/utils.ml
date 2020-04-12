@@ -54,3 +54,31 @@ let int64_to_base64 i =
 let int64_of_base64 s = 
     let s = BatBase64.str_decode s |> Bytes.of_string in 
     EndianBytes.LittleEndian.get_int64 s 0
+
+
+let encode_signed_value secret name value = 
+    let timestamp = Unix.time () |> int_of_float in 
+    let to_sign = Printf.sprintf "%d|%s|%s|" timestamp name value in 
+    let signature =
+        Nocrypto.Hash.SHA256.hmac ~key:secret (Cstruct.of_string to_sign)
+        |> Cstruct.to_string 
+        |> BatBase64.str_encode in 
+    to_sign ^ signature
+
+let decode_signed_value secret inp = 
+    let inp_len = String.length inp in 
+    let rec get_last_pipe start = 
+        if start >= inp_len then start else 
+        match String.index_from_opt inp start '|' with 
+        | None -> start 
+        | Some next_idx -> get_last_pipe next_idx in 
+    let last_pipe_idx = get_last_pipe 0 in 
+    let to_sign = String.sub inp 0 last_pipe_idx in 
+    let signature = String.sub inp last_pipe_idx inp_len
+        |> BatBase64.str_decode
+        |> Cstruct.of_string in 
+    let correct_signature = Nocrypto.Hash.SHA256.hmac ~key:secret (Cstruct.of_string to_sign) in 
+    if signature != correct_signature then raise (Failure "bad signature") else 
+    match String.split_on_char '|' inp with 
+    | [_timestamp; name; value] -> (name, value) 
+    | _ -> raise (Failure "malformed input")

@@ -98,12 +98,13 @@ type subscription_type =
 | SOUNDCLOUD_CHANNEL
 
 type subscription = {
-    created_on: int64;
     subscription_type: subscription_type;
     created_by: string;
     uri: string;
     most_recent_post_id: int64 option;
     next_check_timestamp: int64;
+    prev: int64;
+    deleted_on: int64 option;
 }
 
 val subscription_get_created_on : Bigstring.t -> int64 
@@ -112,8 +113,13 @@ val subscription_get_created_by : Bigstring.t -> string option
 val subscription_get_uri : Bigstring.t -> string option
 val subscription_get_most_recent_post_id : Bigstring.t -> int64 option 
 val subscription_get_subscription_type : Bigstring.t -> subscription_type option
+val subscription_get_prev : Bigstring.t -> int64 option
+val subscription_get_deleted_on : Bigstring.t -> int64 option
 
-val create_subscription_buffer : subscription -> Bigstring.t
+val subscription_set_deleted_on : Bigstring.t -> int64 -> unit
+val subscription_set_most_recent_post_id : Bigstring.t -> int64 -> unit
+
+val create_subscription_buffer : subscription -> int64 -> Bigstring.t
 
 type 'a packer = Bigstring.t -> int -> 'a -> unit
 

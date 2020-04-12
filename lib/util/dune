@@ -1,5 +1,5 @@
 (library
     (name chibi_util)
     (public_name chibibb.util)
-    (libraries lwt lwt.unix batteries ocplib-endian bigstring)
+    (libraries lwt lwt.unix batteries ocplib-endian bigstring nocrypto cstruct)
     (preprocess (pps lwt_ppx)))

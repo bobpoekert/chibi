@@ -107,7 +107,7 @@ let update_locked_log_entry_inplace updater flog offset =
     let header_blob = Log.read flog header_offset sizeof_log_header in
     let header_st = Cstruct.of_bigarray header_blob in 
     let body_size = get_log_header_length header_st |> Int64.to_int in 
-    let whole_entry = Bigstring.sub (Log.get_buffer flog)
+    let whole_entry = Bigstring.sub (Log.get_buffer flog offset)
         (offset  - sizeof_log_header - body_size)
         (body_size + sizeof_log_header) in
     let body = Bigstring.sub whole_entry 0 (body_size - sizeof_log_header) in
@@ -119,6 +119,7 @@ let find_by_id id : (log_entry_type * Bigstring.t) =
     read_log_entry ~offset:id l
 
 let rec links_seq (getter:int -> log_entry_type -> Bigstring.t -> int option) id = 
+    if id == 0 then OSeq.empty else 
     (fun () -> 
         let typ, post = find_by_id id in
         match getter id typ post with 

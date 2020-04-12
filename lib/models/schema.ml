@@ -508,16 +508,21 @@ type subscription = {
 
     next_check_timestamp: uint64_t;
 
+    prev: uint64_t;
+
+    deleted_on: uint64_t;
+
 }
 [@@little_endian]]
 
 type subscription = {
-    created_on: int64;
     subscription_type: subscription_type;
     created_by: string;
     uri: string;
     most_recent_post_id: int64 option;
     next_check_timestamp: int64;
+    prev: int64;
+    deleted_on: int64 option;
 }
 
 let subscription_with_created_by = string_setter 
@@ -527,22 +532,31 @@ let subscription_with_uri = string_setter
     (make_int32_arg_int set_subscription_uri_offset)
     (make_int32_arg_int set_subscription_uri_length)
 
-let create_subscription_buffer (inp:subscription) : Bigstring.t =
+let create_subscription_buffer (inp:subscription) created_on : Bigstring.t =
     let res = buffer_builder_create sizeof_subscription in 
     let res = subscription_with_created_by res inp.created_by in 
     let res = subscription_with_uri res inp.uri in (
-        set_subscription_created_on res.st inp.created_on;
+        set_subscription_created_on res.st created_on;
+        set_subscription_prev res.st inp.prev;
         set_subscription_subscription_type res.st
             (subscription_type_to_int inp.subscription_type);
         set_subscription_next_check_timestamp res.st inp.next_check_timestamp;
         (match inp.most_recent_post_id with 
         | None -> () 
         | Some id -> set_subscription_most_recent_post_id res.st id);
+        (match inp.deleted_on with 
+        | None -> () 
+        | Some ts -> set_subscription_deleted_on res.st ts);
         buffer_builder_pack res
     )
 
+let subscription_set_deleted_on = buffer_packer set_subscription_deleted_on
+let subscription_set_most_recent_post_id = buffer_packer set_subscription_most_recent_post_id
+
 let subscription_get_created_on = buffer_unpacker get_subscription_created_on
 let subscription_get_next_check_timestamp = buffer_unpacker get_subscription_next_check_timestamp
+let subscription_get_prev = buffer_unpacker get_subscription_prev |> sentinel_is_none Int64.zero
+let subscription_get_deleted_on = buffer_unpacker get_subscription_deleted_on |> sentinel_is_none Int64.zero
 let subscription_get_created_by = string_getter
     (get_subscription_created_by_offset %> Int32.to_int)
     (get_subscription_created_by_length %> Int32.to_int)

@@ -1,8 +1,8 @@
 
 type log 
 
-val get_buffer : log -> Bigstring.t
-val get_fd : log -> Unix.file_descr
+val get_buffer : log -> int -> Bigstring.t
+val get_fd : log -> int -> Unix.file_descr
 
 val open_or_create_dir : string -> int -> log
 

@@ -81,8 +81,8 @@ let rec find_by_id id =
     | (Post_log.POST, blob) -> 
         let next = Schema.post_get_next_revision blob |> Int64.to_int in 
         if next != 0 then find_by_id next
-        else Some (id, blob)
-    | _ -> None
+        else (id, blob)
+    | _ -> raise Not_found
 
 
 let returns_some f = (fun v -> Some (f v))
@@ -132,7 +132,7 @@ let all_with_topic topic =
 let get_immediate_replies root = 
     let _root_id, root_buf = root in 
     match Schema.post_get_reply_child_list_head root_buf with 
-    | None -> (fun () -> Seq.Nil)
+    | None -> empty 
     | Some head -> Post_log.links_seq (fun _id entry_type entry -> 
         match entry_type with 
         | Post_log.POST -> (

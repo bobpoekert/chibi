@@ -7,8 +7,6 @@ type mapped_file = {
     buffer : Bigstring.t
 }
 
-let get_buffer f = f.buffer 
-let get_fd f = f.fd
 
 let map_file size fname : mapped_file = 
     let fd = Unix.openfile fname [Unix.O_RDWR; Unix.O_CREAT; Unix.O_APPEND] 0o660 in 
@@ -46,7 +44,6 @@ type log = {
     write_lock: Mutex.t;
     max_file_size: int;
 }
-
 
 let log_default () = {
     files = ref [];
@@ -124,6 +121,9 @@ let file_containing fs start =
     let h_end = h_end + h_start in 
     if h_end < start then raise Not_found else
     List.find (fun (off, f) -> (off + (file_get_end_offset f |> Int32.to_int)) < start) fs
+
+let get_buffer l off = let _, v = (file_containing !(l.files) off) in v.buffer
+let get_fd l off = let _, v = (file_containing !(l.files) off) in v.fd
 
 
 let read l start len = 
