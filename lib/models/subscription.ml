@@ -46,6 +46,13 @@ let delete (id, _) =
         ) App_state.state.post_log id
     )
 
+let update_most_recent_post sub new_id = 
+    Log.with_write_lock (fun () -> 
+        Post_log.update_locked_log_entry_inplace (fun _st buf -> 
+            Schema.subscription_set_most_recent_post_id buf new_id
+        )
+    )
+
 let find_by_id id = 
     match Post_log.find_by_id id with 
     | (Post_log.SUBSCRIPTION, blob) -> Some (id, blob) 
@@ -87,6 +94,9 @@ let all_pending () =
     let now = Unix.time () |> Int64.of_float in 
     all () 
     |> filter (fun sub -> 
-        (get_next_check_timestamp sub) <= now
+        (get_next_check_timestamp sub) < now
     )
 
+let all_with_uri uri = 
+    all () 
+    |> filter (fun sub -> (get_uri sub) == uri)
