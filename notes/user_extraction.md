@@ -2,14 +2,23 @@
 getting feed from page:
 
 if there's a custom extractor for the url, use that, else
+
 if there's a custom extractor for and app url in a meta tag, use that, else
+
 if there's a rel="alternate" pointing to an rss or atom feed, use that, else
+
 if there's a rel="alternate" on the domain's home page, use that, else 
+
 if there's a name="twitter:site" meta tag, use that, else
+
 if there's a property="fb:profile\_id" meta tag, use that, else
+
 if there's a property="fb:pages" meta tag, use that, else
+
 if the domain's robots.txt points to a sitemap, use that else
+
 if domain/sitemap.xml returns a sitemap, use that else
+
 give up
 
 
